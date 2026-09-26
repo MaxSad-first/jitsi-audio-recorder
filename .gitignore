@@ -1,0 +1,18 @@
+# Секреты — НИКОГДА не коммитить
+.env
+.env.*
+!.env.example
+
+# Записи
+recordings/
+*.webm
+*.mp3
+*.ogg
+
+# Зависимости и сборка
+node_modules/
+vendor/
+
+# Логи и мусор
+*.log
+.DS_Store

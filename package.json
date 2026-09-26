@@ -1,0 +1,20 @@
+{
+  "name": "jitsi-audio-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Headless multi-room audio-only recorder bot for self-hosted Jitsi Meet. Joins as a receive-only participant, mixes all participants' audio into a single track per room, and writes it to an Ogg/Opus file.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "css-select": "^5.1.0",
+    "xhr2": "^0.2.1",
+    "@roamhq/wrtc": "^0.10.0",
+    "express": "^4.19.2",
+    "jsdom": "^24.1.1",
+    "ws": "^8.18.0",
+    "node-fetch": "^2.7.0",
+    "form-data": "^4.0.0"
+  }
+}

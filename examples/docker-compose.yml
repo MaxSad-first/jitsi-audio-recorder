@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  audio-recorder:
+    build: .
+    container_name: jitsi-audio-recorder
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./recordings:/recordings
+    ports:
+      - '3000:3000'
+    networks:
+      - jitsi
+
+networks:
+  jitsi:
+    external: true
+    name: meet.jitsi
