@@ -33,12 +33,10 @@ fi
 # === Banner ===
 cat << 'BANNER'
 
-   ___ _ _        _           _         _           _       _
-  |_ _(_) |_ __ _| |_ ___    /_\  _   _(_)___ _ __ | | __ _| |_ ___  _ __
-   | || | __/ _` | __/ __|  / _ \| | | | / __| '_ \| |/ _` | __/ _ \| '__|
-   | || | || (_| | |_\__ \ / ___ \ |_| | \__ \ |_) | | (_| | || (_) | |
-  |___|_|\__\__,_|\__|___//_/   \_\__,_|_|___/ .__/|_|\__,_|\__\___/|_|
-                                              |_|
+ _ __ ___   __ ___  _____  __ _  __| |      / _(_)_ __ ___| |_
+| '_ ` _ \ / _` \ \/ / __|/ _` |/ _` |_____| |_| | '__/ __| __|
+| | | | | | (_| |>  <\__ \ (_| | (_| |_____|  _| | |  \__ \ |_
+|_| |_| |_|\__,_/_/\_\___/\__,_|\__,_|     |_| |_|_|  |___/\__|
 
 BANNER
 
@@ -96,6 +94,16 @@ fi
 
 # Секретный ключ для подписанных URL
 SECRET_KEY=$(openssl rand -hex 32)
+
+# Токен для /recorder-api/ — без него любой человек в интернете может дёрнуть
+# POST .../recorder-api/recordings и запустить запись любой комнаты в обход UI.
+# ВАЖНО: summon-bot.js публично отдаётся браузером, так что этот токен виден
+# любому, кто откроет исходный код страницы — он останавливает случайное/
+# автоматическое обнаружение эндпоинта сканерами, но НЕ защищает от человека,
+# который целенаправленно прочитает summon-bot.js. Для настоящей защиты нужен
+# либо реальный auth в самом Jitsi (JWT/модераторы), либо доп. проверки на
+# уровне nginx (rate-limit, allowlist по Referer и т.п.).
+API_TOKEN=$(openssl rand -hex 32)
 
 # ============================================================================
 # ШАГ 2. Проверка зависимостей
@@ -199,8 +207,8 @@ PORT=3000
 OUTPUT_DIR=/recordings
 VENDOR_DIR=/app/vendor
 
-API_TOKEN=
-CORS_ORIGIN=*
+API_TOKEN=${API_TOKEN}
+CORS_ORIGIN=https://${JITSI_DOMAIN}
 
 FILE_ACCESS_SECRET_KEY=${SECRET_KEY}
 FILE_ACCESS_EXPIRES_MINUTES=15
@@ -211,13 +219,15 @@ FIREFLIES_API_KEY=${FIREFLIES_API_KEY}
 DELETE_AFTER_UPLOAD=false
 EOF
 
-success ".env создан"
+chmod 600 "$INSTALL_DIR/.env"
+success ".env создан (права 600 — внутри пароль XMPP и секретные ключи)"
 
 # === summon-bot.js ===
 cat > "$INSTALL_DIR/injection/summon-bot.js" << 'JSEOF'
 (function () {
   'use strict';
   var API = '/recorder-api';
+  var API_TOKEN = '__API_TOKEN__';
   var MENU_ANCHOR_RE = /(встроить встречу|embed meeting|комбинации клавиш|keyboard shortcuts)/i;
   var state = { status: 'idle', error: null };
   function roomName() {
@@ -258,7 +268,7 @@ cat > "$INSTALL_DIR/injection/summon-bot.js" << 'JSEOF'
     if (isDisabled()) return;
     state.status = 'loading'; render(item);
     fetch(API + '/recordings', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: {'Content-Type':'application/json', 'Authorization':'Bearer ' + API_TOKEN},
       body: JSON.stringify({room: roomName(), displayName: 'Recorder Bot'})
     }).then(function(r){
       if (r.status === 200 || r.status === 409) state.status = 'active';
@@ -305,6 +315,7 @@ cat > "$INSTALL_DIR/injection/summon-bot.js" << 'JSEOF'
 })();
 JSEOF
 
+sed -i "s/__API_TOKEN__/${API_TOKEN}/" "$INSTALL_DIR/injection/summon-bot.js"
 success "summon-bot.js создан"
 
 # === nginx-патчи ===
@@ -422,28 +433,75 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
     success "summon-bot.js скопирован в $WEB_DIR"
 
     # Добавить блок в meet.conf (если его там нет)
+    # Вставляем ПЕРЕД последней закрывающей "}" файла (это location{}-директивы,
+    # они обязаны быть внутри server{} — простой '>>' в конец файла кладёт их
+    # СНАРУЖИ server{} и ломает конфиг).
     MEET_CONF="$WEB_DIR/nginx/meet.conf"
     if [[ -f "$MEET_CONF" ]]; then
         if grep -q "# === Recorder bot integration ===" "$MEET_CONF"; then
             warn "Блок уже есть в meet.conf — пропускаем"
         else
-            cat "$INSTALL_DIR/injection/nginx-docker.conf" >> "$MEET_CONF"
-            success "nginx-блок добавлен в $MEET_CONF"
+            LAST_BRACE_LINE=$(grep -n '^}[[:space:]]*$' "$MEET_CONF" | tail -1 | cut -d: -f1)
+            if [[ -n "$LAST_BRACE_LINE" ]]; then
+                TMP_CONF=$(mktemp)
+                head -n "$((LAST_BRACE_LINE - 1))" "$MEET_CONF" > "$TMP_CONF"
+                cat "$INSTALL_DIR/injection/nginx-docker.conf" >> "$TMP_CONF"
+                tail -n "+${LAST_BRACE_LINE}" "$MEET_CONF" >> "$TMP_CONF"
+                mv "$TMP_CONF" "$MEET_CONF"
+                success "nginx-блок вставлен в $MEET_CONF (внутрь server{})"
+            else
+                warn "Не нашёл закрывающую } в $MEET_CONF — добавляю в конец файла, ПРОВЕРЬТЕ nginx -t вручную!"
+                cat "$INSTALL_DIR/injection/nginx-docker.conf" >> "$MEET_CONF"
+            fi
         fi
     else
         warn "$MEET_CONF не найден — добавьте блок из nginx-docker.conf вручную"
     fi
 
-    # Создать XMPP-пользователя через контейнер prosody
-    info "Создание XMPP-пользователя recorder..."
+    # Определить РЕАЛЬНЫЙ XMPP-домен и docker-сеть по факту, а не по введённому
+    # публичному домену — они почти всегда разные (внутренний виртуалхост
+    # prosody обычно "meet.jitsis", даже если сайт открывается по другому имени).
+    REAL_XMPP_DOMAIN=""
+    REAL_MUC_DOMAIN=""
+    ACTUAL_NETWORK=""
+    PROSODY_CONTAINER=""
     if docker ps --format '{{.Names}}' | grep -q "prosody"; then
         PROSODY_CONTAINER=$(docker ps --format '{{.Names}}' | grep prosody | head -1)
-        docker exec "$PROSODY_CONTAINER" prosodyctl register recorder "$JITSI_DOMAIN" "$XMPP_PASSWORD" \
+
+        REAL_XMPP_DOMAIN=$(docker exec "$PROSODY_CONTAINER" \
+            grep -m1 -oP 'VirtualHost "\K[^"]+' /config/conf.d/jitsi-meet.cfg.lua 2>/dev/null || true)
+        REAL_MUC_DOMAIN=$(docker exec "$PROSODY_CONTAINER" \
+            grep -oP 'Component "\Kmuc\.[^"]+(?=" "muc")' /config/conf.d/jitsi-meet.cfg.lua 2>/dev/null | head -1 || true)
+        ACTUAL_NETWORK=$(docker inspect -f \
+            '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$PROSODY_CONTAINER" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$REAL_XMPP_DOMAIN" ]]; then
+        info "Обнаружен реальный XMPP-домен prosody: $REAL_XMPP_DOMAIN (введённый публичный домен $JITSI_DOMAIN используется только для JITSI_BASE_URL)"
+        sed -i "s|^XMPP_DOMAIN=.*|XMPP_DOMAIN=${REAL_XMPP_DOMAIN}|" "$INSTALL_DIR/.env"
+        [[ -n "$REAL_MUC_DOMAIN" ]] && sed -i "s|^MUC_DOMAIN=.*|MUC_DOMAIN=${REAL_MUC_DOMAIN}|" "$INSTALL_DIR/.env"
+    else
+        warn "Не удалось автоопределить XMPP-домен prosody — оставляю ${JITSI_DOMAIN}. Проверьте вручную:"
+        info "  docker exec <prosody> grep VirtualHost /config/conf.d/jitsi-meet.cfg.lua"
+    fi
+    XMPP_REGISTER_DOMAIN="${REAL_XMPP_DOMAIN:-$JITSI_DOMAIN}"
+
+    if [[ -n "$ACTUAL_NETWORK" ]]; then
+        info "Обнаружена реальная docker-сеть: $ACTUAL_NETWORK"
+        sed -i "s|- meet.jitsi\$|- ${ACTUAL_NETWORK}|; s|^  meet.jitsi:|  ${ACTUAL_NETWORK}:|" "$INSTALL_DIR/docker-compose.yml"
+    else
+        warn "Не удалось автоопределить docker-сеть — проверьте 'networks:' в $INSTALL_DIR/docker-compose.yml вручную (docker network ls)"
+    fi
+
+    # Создать XMPP-пользователя через контейнер prosody (на РЕАЛЬНОМ домене)
+    info "Создание XMPP-пользователя recorder..."
+    if [[ -n "$PROSODY_CONTAINER" ]]; then
+        docker exec "$PROSODY_CONTAINER" prosodyctl register recorder "$XMPP_REGISTER_DOMAIN" "$XMPP_PASSWORD" \
             || warn "Не удалось создать пользователя (возможно уже существует)"
         success "XMPP-пользователь готов"
     else
         warn "Контейнер prosody не запущен — создайте пользователя вручную:"
-        info "  docker exec <prosody> prosodyctl register recorder $JITSI_DOMAIN $XMPP_PASSWORD"
+        info "  docker exec <prosody> prosodyctl register recorder $XMPP_REGISTER_DOMAIN $XMPP_PASSWORD"
     fi
 
     # Собрать и запустить
@@ -557,7 +615,10 @@ ${YELLOW}Следующие шаги:${NC}
 
 ${YELLOW}Проверка:${NC}
   curl https://${JITSI_DOMAIN}/recorder-api/health
-  curl https://${JITSI_DOMAIN}/recorder-api/files
+  curl -H "Authorization: Bearer ${API_TOKEN}" https://${JITSI_DOMAIN}/recorder-api/files
+
+${YELLOW}API-токен (для ручных curl-запросов, кнопка в UI уже настроена сама):${NC}
+  ${API_TOKEN}
 
 ${YELLOW}Логи:${NC}
 EOF
@@ -575,3 +636,4 @@ ${YELLOW}Конфигурация:${NC}
   $INSTALL_DIR/.env
 
 ${GREEN}Готово!${NC}
+EOF
