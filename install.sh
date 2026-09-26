@@ -494,14 +494,19 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
     fi
 
     # Создать XMPP-пользователя через контейнер prosody (на РЕАЛЬНОМ домене)
+    # ВАЖНО: у образа jitsi/prosody сам бинарник prosodyctl при вызове через
+    # `docker exec` не находит свой конфиг по дефолтному пути
+    # /etc/prosody/prosody.cfg.lua — нужно явно указывать --config,
+    # см. https://github.com/jitsi/docker-jitsi-meet/issues/109
     info "Создание XMPP-пользователя recorder..."
     if [[ -n "$PROSODY_CONTAINER" ]]; then
-        docker exec "$PROSODY_CONTAINER" prosodyctl register recorder "$XMPP_REGISTER_DOMAIN" "$XMPP_PASSWORD" \
+        docker exec "$PROSODY_CONTAINER" prosodyctl --config /config/prosody.cfg.lua \
+            register recorder "$XMPP_REGISTER_DOMAIN" "$XMPP_PASSWORD" \
             || warn "Не удалось создать пользователя (возможно уже существует)"
         success "XMPP-пользователь готов"
     else
         warn "Контейнер prosody не запущен — создайте пользователя вручную:"
-        info "  docker exec <prosody> prosodyctl register recorder $XMPP_REGISTER_DOMAIN $XMPP_PASSWORD"
+        info "  docker exec <prosody> prosodyctl --config /config/prosody.cfg.lua register recorder $XMPP_REGISTER_DOMAIN $XMPP_PASSWORD"
     fi
 
     # Собрать и запустить
