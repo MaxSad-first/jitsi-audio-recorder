@@ -18,6 +18,7 @@
 - 🎤 **Fireflies AI** — автоматическая транскрипция и AI-анализ
 
 ## 🏗 Архитектура
+```bash
 Browser (Jitsi UI)
 │ WebRTC audio
 ▼
@@ -31,7 +32,7 @@ AudioMixer → ffmpeg (libopus) → .webm file
 │
 ▼
 Подписанный URL (15 мин) → Fireflies API → Транскрипция
-
+```
 
 ## 🚀 Быстрый старт
 
@@ -47,10 +48,13 @@ AudioMixer → ffmpeg (libopus) → .webm file
 ```bash
 git clone https://github.com/MaxSad-first/jitsi-audio-recorder.git
 cd jitsi-audio-recorder
+```
 
 # Запустить установщик
+```bash
 chmod +x install.sh
 sudo ./install.sh
+```
 
 ### Установщик:
 - Проверит зависимости
@@ -68,18 +72,26 @@ sudo ./install.sh
 
 ### 🔌 API Endpoints
 Начать запись
+```bash
 curl -X POST http://localhost:3000/recordings \
   -H "Content-Type: application/json" \
   -d '{"room": "my-meeting", "displayName": "Recorder Bot"}'
+```
 
 Остановить запись
+```bash
 curl -X POST http://localhost:3000/recordings/my-meeting/stop
+```
 
 Список активных записей
+```bash
 curl http://localhost:3000/recordings
+```
 
 Получить подписанную ссылку
+```bash
 curl http://localhost:3000/sign/filename.webm
+```
 
 ### 🎨 UI Integration
 После установки в меню ⋯ Jitsi появляется пункт «🎙 Призвать бота записи»:
@@ -116,6 +128,7 @@ FILE_ACCESS_EXPIRES_MINUTES=15
 FIREFLIES_ENABLED=true
 FIREFLIES_API_KEY=your-key
 DELETE_AFTER_UPLOAD=false
+```
 
 ### ⚙📊 Производительность
 - Тест с 5 параллельными записями:
